@@ -408,101 +408,101 @@ class LimitState(StatesGroup):
 def main_menu_inline(uid):
     kb = InlineKeyboardBuilder()
     if is_admin(uid):
-        kb.button(text="📝 Post Yaratish",      callback_data="menu_post")
-        kb.button(text="🔒 Majburiy Obuna",     callback_data="menu_sub")
-        kb.button(text="🛡 So'z Filtri & Limit", callback_data="menu_mod")
+        kb.button(text="📝 Post Yaratish",      callback_data="menu_post", style="primary")
+        kb.button(text="🔒 Majburiy Obuna",     callback_data="menu_sub", style="primary")
+        kb.button(text="🛡 So'z Filtri & Limit", callback_data="menu_mod", style="primary")
     if is_founder(uid):
-        kb.button(text="👤 Adminlar boshqaruvi", callback_data="menu_admins")
-        kb.button(text="⭐️ Pro boshqaruvi",      callback_data="menu_pro_mgmt")
+        kb.button(text="👤 Adminlar boshqaruvi", callback_data="menu_admins", style="success")
+        kb.button(text="⭐️ Pro boshqaruvi",      callback_data="menu_pro_mgmt", style="success")
     if not is_admin(uid):
-        kb.button(text="⭐️ Pro Versiya",   callback_data="menu_pro")
-        kb.button(text="🔑 Admin so'rash", callback_data="menu_req_admin")
+        kb.button(text="⭐️ Pro Versiya",   callback_data="menu_pro", style="success")
+        kb.button(text="🔑 Admin so'rash", callback_data="menu_req_admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
 def color_kb(prefix):
     kb = InlineKeyboardBuilder()
-    kb.button(text="Yashil 🟢", callback_data=f"{prefix}_success")
-    kb.button(text="Qizil 🔴",  callback_data=f"{prefix}_danger")
-    kb.button(text="Ko'k 🔵",   callback_data=f"{prefix}_primary")
+    kb.button(text="Yashil 🟢", callback_data=f"{prefix}_success", style="success")
+    kb.button(text="Qizil 🔴",  callback_data=f"{prefix}_danger", style="danger")
+    kb.button(text="Ko'k 🔵",   callback_data=f"{prefix}_primary", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
 def cancel_kb(prefix="cancel"):
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔙 Bekor qilish", callback_data=prefix)
+    kb.button(text="🔙 Bekor qilish", callback_data=prefix, style="danger")
     return kb.as_markup()
 
 def done_or_cancel_kb():
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Tayyor — Tugma kerak emas", callback_data="btn_done")
-    kb.button(text="🔙 Bekor qilish", callback_data="cancel")
+    kb.button(text="✅ Tayyor — Tugma kerak emas", callback_data="btn_done", style="success")
+    kb.button(text="🔙 Bekor qilish", callback_data="cancel", style="danger")
     kb.adjust(1)
     return kb.as_markup()
 
 def admin_manage_inline():
     kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Admin qo'shish",    callback_data="adm_add")
-    kb.button(text="➖ Admin o'chirish",   callback_data="adm_remove")
-    kb.button(text="📋 Adminlar ro'yxati", callback_data="adm_list")
-    kb.button(text="🔙 Orqaga",            callback_data="menu_back")
+    kb.button(text="➕ Admin qo'shish",    callback_data="adm_add", style="success")
+    kb.button(text="➖ Admin o'chirish",   callback_data="adm_remove", style="danger")
+    kb.button(text="📋 Adminlar ro'yxati", callback_data="adm_list", style="primary")
+    kb.button(text="🔙 Orqaga",            callback_data="menu_back", style="danger")
     kb.adjust(2)
     return kb.as_markup()
 
 def pro_manage_inline():
     kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Pro berish",    callback_data="pro_add")
-    kb.button(text="➖ Pro o'chirish", callback_data="pro_remove")
-    kb.button(text="📋 Pro ro'yxati",  callback_data="pro_list")
-    kb.button(text="🔙 Orqaga",        callback_data="menu_back")
+    kb.button(text="➕ Pro berish",    callback_data="pro_add", style="success")
+    kb.button(text="➖ Pro o'chirish", callback_data="pro_remove", style="danger")
+    kb.button(text="📋 Pro ro'yxati",  callback_data="pro_list", style="primary")
+    kb.button(text="🔙 Orqaga",        callback_data="menu_back", style="danger")
     kb.adjust(2)
     return kb.as_markup()
 
 def target_inline(uid):
     kb = InlineKeyboardBuilder()
     if is_founder(uid):
-        kb.button(text="🌐 Barchaga yuborish",      callback_data="target_all")
-        kb.button(text="🎯 Maxsus chatga yuborish",  callback_data="target_specific")
+        kb.button(text="🌐 Barchaga yuborish",      callback_data="target_all", style="primary")
+        kb.button(text="🎯 Maxsus chatga yuborish",  callback_data="target_specific", style="primary")
     groups = get_admin_groups_info(uid)
     for g in groups:
         title = g[1] or f"Chat {g[0]}"
-        kb.button(text=f"📢 {title}", callback_data=f"target_group_{g[0]}")
-    kb.button(text="📤 O'zimga yuborish", callback_data="target_self")
-    kb.button(text="🔙 Bekor qilish",    callback_data="cancel")
+        kb.button(text=f"📢 {title}", callback_data=f"target_group_{g[0]}", style="primary")
+    kb.button(text="📤 O'zimga yuborish", callback_data="target_self", style="success")
+    kb.button(text="🔙 Bekor qilish",    callback_data="cancel", style="danger")
     kb.adjust(1)
     return kb.as_markup()
 
 def mod_main_kb():
     return (
         InlineKeyboardBuilder()
-        .button(text="🏢 Mening guruhlarim",    callback_data="mod_list_groups")
-        .button(text="🔄 Ro'yxatni yangilash",  callback_data="mod_list_groups")
-        .button(text="🔙 Bosh menyu",           callback_data="menu_back")
+        .button(text="🏢 Mening guruhlarim",    callback_data="mod_list_groups", style="primary")
+        .button(text="🔄 Ro'yxatni yangilash",  callback_data="mod_list_groups", style="success")
+        .button(text="🔙 Bosh menyu",           callback_data="menu_back", style="danger")
         .adjust(1)
         .as_markup()
     )
 
 def sub_menu_kb():
     kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Obuna qo'shish",   callback_data="sub_add")
-    kb.button(text="➖ Obunaни o'chirish", callback_data="sub_del")
-    kb.button(text="🔙 Orqaga",           callback_data="menu_back")
+    kb.button(text="➕ Obuna qo'shish",   callback_data="sub_add", style="success")
+    kb.button(text="➖ Obunaни o'chirish", callback_data="sub_del", style="danger")
+    kb.button(text="🔙 Orqaga",           callback_data="menu_back", style="danger")
     kb.adjust(1)
     return kb.as_markup()
 
 def word_mode_kb():
     kb = InlineKeyboardBuilder()
-    kb.button(text="👥 Faqat Userlarga",  callback_data="wmode_0")
-    kb.button(text="🛡 Faqat Adminlarga", callback_data="wmode_1")
-    kb.button(text="🔥 Hammaga",          callback_data="wmode_2")
+    kb.button(text="👥 Faqat Userlarga",  callback_data="wmode_0", style="primary")
+    kb.button(text="🛡 Faqat Adminlarga", callback_data="wmode_1", style="danger")
+    kb.button(text="🔥 Hammaga",          callback_data="wmode_2", style="success")
     kb.adjust(1)
     return kb.as_markup()
 
 def limit_mode_kb():
     kb = InlineKeyboardBuilder()
-    kb.button(text="👥 Faqat Userlarga",  callback_data="l_target_0")
-    kb.button(text="🛡 Faqat Adminlarga", callback_data="l_target_1")
-    kb.button(text="🔥 Hammaga",          callback_data="l_target_2")
+    kb.button(text="👥 Faqat Userlarga",  callback_data="l_target_0", style="primary")
+    kb.button(text="🛡 Faqat Adminlarga", callback_data="l_target_1", style="danger")
+    kb.button(text="🔥 Hammaga",          callback_data="l_target_2", style="success")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -563,7 +563,7 @@ async def send_main_menu(target, uid, text=None):
 async def _do_send(data, targets):
     builder = InlineKeyboardBuilder()
     for b in data.get('btns', []):
-        try: builder.row(types.InlineKeyboardButton(text=b['text'], url=b['url']))
+        try: builder.button(text=b['text'], url=b['url'], style=b.get('style', 'primary'))
         except: pass
     rm = builder.as_markup() if data.get('btns') else None
     success = 0
@@ -660,8 +660,8 @@ async def req_admin_cb(call: CallbackQuery):
     if is_admin(uid): return await call.answer("Siz allaqachon adminsiz!", show_alert=True)
     kb = (
         InlineKeyboardBuilder()
-        .button(text="✅ Tasdiqlash", callback_data=f"approve_{uid}")
-        .button(text="❌ Rad etish",  callback_data=f"reject_{uid}")
+        .button(text="✅ Tasdiqlash", callback_data=f"approve_{uid}", style="success")
+        .button(text="❌ Rad etish",  callback_data=f"reject_{uid}", style="danger")
         .as_markup()
     )
     try:
@@ -708,7 +708,7 @@ async def adm_list_cb(call: CallbackQuery):
         text = "👤 <b>Adminlar ro'yxati:</b>\n\n" + "\n".join([f"• {a[1]} — <code>{a[0]}</code>" for a in admins])
     else:
         text = "Adminlar ro'yxati bo'sh."
-    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_admins")
+    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_admins", style="danger")
     await call.message.edit_text(text, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "adm_add")
@@ -740,8 +740,8 @@ async def adm_remove_cb(call: CallbackQuery, state: FSMContext):
         return await call.answer("Adminlar ro'yxati bo'sh!", show_alert=True)
     kb = InlineKeyboardBuilder()
     for uid, name in admins:
-        kb.button(text=f"❌ {name} ({uid})", callback_data=f"adm_del_{uid}")
-    kb.button(text="🔙 Orqaga", callback_data="menu_admins")
+        kb.button(text=f"❌ {name} ({uid})", callback_data=f"adm_del_{uid}", style="danger")
+    kb.button(text="🔙 Orqaga", callback_data="menu_admins", style="primary")
     kb.adjust(1)
     await call.message.edit_text("O'chirmoqchi bo'lgan adminni tanlang:", reply_markup=kb.as_markup())
 
@@ -767,7 +767,7 @@ async def pro_list_cb(call: CallbackQuery):
     if not is_founder(call.from_user.id): return
     pros = get_all_pro_users()
     text = "⭐️ <b>Pro Foydalanuvchilar:</b>\n\n" + "\n".join([f"• {a[1]} — <code>{a[0]}</code>" for a in pros]) if pros else "Ro'yxat bo'sh."
-    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_pro_mgmt")
+    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_pro_mgmt", style="danger")
     await call.message.edit_text(text, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "pro_add")
@@ -799,8 +799,8 @@ async def pro_remove_cb(call: CallbackQuery, state: FSMContext):
         return await call.answer("Pro foydalanuvchilar bo'sh!", show_alert=True)
     kb = InlineKeyboardBuilder()
     for uid, name in pros:
-        kb.button(text=f"❌ {name} ({uid})", callback_data=f"pro_del_{uid}")
-    kb.button(text="🔙 Orqaga", callback_data="menu_pro_mgmt")
+        kb.button(text=f"❌ {name} ({uid})", callback_data=f"pro_del_{uid}", style="danger")
+    kb.button(text="🔙 Orqaga", callback_data="menu_pro_mgmt", style="primary")
     kb.adjust(1)
     await call.message.edit_text("O'chirmoqchi bo'lgan Pro userni tanlang:", reply_markup=kb.as_markup())
 
@@ -998,8 +998,8 @@ async def mod_list_groups_cb(call: CallbackQuery):
         )
     kb = InlineKeyboardBuilder()
     for g_id, g_name in groups:
-        kb.button(text=f"👥 {g_name}", callback_data=f"mod_manage_{g_id}")
-    kb.button(text="🔙 Orqaga", callback_data="menu_mod")
+        kb.button(text=f"👥 {g_name}", callback_data=f"mod_manage_{g_id}", style="primary")
+    kb.button(text="🔙 Orqaga", callback_data="menu_mod", style="danger")
     kb.adjust(1)
     await call.message.edit_text("Guruhni tanlang:", reply_markup=kb.as_markup())
 
@@ -1010,12 +1010,12 @@ async def mod_manage_cb(call: CallbackQuery):
     l_set = get_post_limit_settings(int(g_id))
     limit_text = f"✅ Yoqilgan (kunda {l_set[0]} ta)" if l_set else "❌ O'chirilgan"
     kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Yangi so'z filtri qo'shish", callback_data=f"mod_add_{g_id}")
-    kb.button(text=f"🗑 Filtrlarni ko'rish ({len(rules)} ta)", callback_data=f"mod_view_{g_id}")
-    kb.button(text=f"📊 Kunlik Limit: {limit_text}", callback_data=f"mod_limit_{g_id}")
+    kb.button(text="➕ Yangi so'z filtri qo'shish", callback_data=f"mod_add_{g_id}", style="success")
+    kb.button(text=f"🗑 Filtrlarni ko'rish ({len(rules)} ta)", callback_data=f"mod_view_{g_id}", style="primary")
+    kb.button(text=f"📊 Kunlik Limit: {limit_text}", callback_data=f"mod_limit_{g_id}", style="primary")
     if l_set:
-        kb.button(text="🗑 Limitni o'chirish", callback_data=f"mod_limit_del_{g_id}")
-    kb.button(text="🔙 Orqaga", callback_data="mod_list_groups")
+        kb.button(text="🗑 Limitni o'chirish", callback_data=f"mod_limit_del_{g_id}", style="danger")
+    kb.button(text="🔙 Orqaga", callback_data="mod_list_groups", style="danger")
     kb.adjust(1)
     await call.message.edit_text("⚙️ <b>Guruh sozlamalari:</b>", reply_markup=kb.as_markup())
 
@@ -1081,9 +1081,10 @@ async def mod_view_cb(call: CallbackQuery):
         icon = mode_icons.get(mode, "👥")
         kb.button(
             text=f"{icon} {words[:25]}... | {reply[:15]}",
-            callback_data=f"mod_rule_{r_id}_{g_id}"
+            callback_data=f"mod_rule_{r_id}_{g_id}",
+            style="primary"
         )
-    kb.button(text="🔙 Orqaga", callback_data=f"mod_manage_{g_id}")
+    kb.button(text="🔙 Orqaga", callback_data=f"mod_manage_{g_id}", style="danger")
     kb.adjust(1)
     await call.message.edit_text(f"🗂 Filtrlar ({len(rules)} ta):", reply_markup=kb.as_markup())
 
@@ -1097,8 +1098,8 @@ async def mod_rule_detail_cb(call: CallbackQuery):
         return await call.answer("Filtr topilmadi!", show_alert=True)
     mode_text = {0: "👥 Faqat Userlarga", 1: "🛡 Faqat Adminlarga", 2: "🔥 Hammaga"}.get(rule[3], "Noma'lum")
     kb = InlineKeyboardBuilder()
-    kb.button(text="🗑 Filterni o'chirish", callback_data=f"mod_del_rule_{r_id}_{g_id}")
-    kb.button(text="🔙 Orqaga", callback_data=f"mod_view_{g_id}")
+    kb.button(text="🗑 Filterni o'chirish", callback_data=f"mod_del_rule_{r_id}_{g_id}", style="danger")
+    kb.button(text="🔙 Orqaga", callback_data=f"mod_view_{g_id}", style="primary")
     kb.adjust(1)
     await call.message.edit_text(
         f"📋 <b>Filtr ma'lumotlari:</b>\n\n"
@@ -1222,10 +1223,12 @@ async def watcher(message: Message):
                             kb = InlineKeyboardBuilder()
                             for c in nosub:
                                 c_clean = c.strip().replace('@', '')
-                                kb.row(types.InlineKeyboardButton(
+                                kb.button(
                                     text=f"📢 {c.strip()} ga obuna bo'lish",
-                                    url=f"https://t.me/{c_clean}"
-                                ))
+                                    url=f"https://t.me/{c_clean}",
+                                    style=style or "primary"
+                                )
+                            kb.adjust(1)
                             w = await message.answer(
                                 f"⚠️ {message.from_user.mention_html()}, quyidagi kanallarga a'zo bo'lmasangiz "
                                 f"bu guruhda yoza olmaysiz!\n\n"
