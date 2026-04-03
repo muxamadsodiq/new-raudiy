@@ -23,6 +23,8 @@ TOKEN = "8371029652:AAGlBnB0N_DmWaK1y-ZSlIUP9k_XxXbuFnA"
 MAIN_ADMIN_ID = 5724592490
 DB_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_bot.db")
 
+STYLE_EMOJIS = {"success": "🟢", "danger": "🔴", "primary": "🔵"}
+
 LIMIT_PEOPLE = 3
 LIMIT_TIME = 600
 WARNING_TIMEOUT = 180  # 3 daqiqa
@@ -563,7 +565,9 @@ async def send_main_menu(target, uid, text=None):
 async def _do_send(data, targets):
     builder = InlineKeyboardBuilder()
     for b in data.get('btns', []):
-        try: builder.row(types.InlineKeyboardButton(text=b['text'], url=b['url']))
+        try:
+            style_emoji = STYLE_EMOJIS.get(b.get('style', 'primary'), '🔵')
+            builder.row(types.InlineKeyboardButton(text=f"{style_emoji} {b['text']}", url=b['url']))
         except: pass
     rm = builder.as_markup() if data.get('btns') else None
     success = 0
@@ -1220,10 +1224,11 @@ async def watcher(message: Message):
 
                         if user_key not in active_warnings:
                             kb = InlineKeyboardBuilder()
+                            style_emoji = STYLE_EMOJIS.get(style or 'primary', '🔵')
                             for c in nosub:
                                 c_clean = c.strip().replace('@', '')
                                 kb.row(types.InlineKeyboardButton(
-                                    text=f"📢 {c.strip()} ga obuna bo'lish",
+                                    text=f"{style_emoji} {c.strip()} ga obuna bo'lish",
                                     url=f"https://t.me/{c_clean}"
                                 ))
                             w = await message.answer(
