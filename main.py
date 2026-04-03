@@ -566,7 +566,7 @@ async def _do_send(data, targets):
     builder = InlineKeyboardBuilder()
     for b in data.get('btns', []):
         try:
-            style_emoji = STYLE_EMOJIS.get(b.get('style', 'primary'), '🔵')
+            style_emoji = STYLE_EMOJIS.get(b.get('style', 'primary'), STYLE_EMOJIS['primary'])
             builder.row(types.InlineKeyboardButton(text=f"{style_emoji} {b['text']}", url=b['url']))
         except: pass
     rm = builder.as_markup() if data.get('btns') else None
@@ -1224,7 +1224,7 @@ async def watcher(message: Message):
 
                         if user_key not in active_warnings:
                             kb = InlineKeyboardBuilder()
-                            style_emoji = STYLE_EMOJIS.get(style or 'primary', '🔵')
+                            style_emoji = STYLE_EMOJIS.get(style or 'primary', STYLE_EMOJIS['primary'])
                             for c in nosub:
                                 c_clean = c.strip().replace('@', '')
                                 kb.row(types.InlineKeyboardButton(
