@@ -28,10 +28,7 @@ LIMIT_TIME = 600
 WARNING_TIMEOUT = 180  # 3 daqiqa
 SUB_CHECK_INTERVAL = 1 # 4 soniyada bir obuna qayta tekshiriladi
 
-# Ogohlantirishlar nazorati uchun global lug'atlar
-# {(chat_id, user_id): asyncio.Task} -> ogohlantirish tasklari
 active_warnings = {}
-# {(chat_id, user_id): asyncio.Task} -> obuna polling tasklari
 active_sub_polls = {}
 group_stats = {}
 
@@ -45,15 +42,14 @@ def init_db():
     conn = get_db()
     try:
         c = conn.cursor()
-
-        # --- JADVALLAR ---
         c.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY, full_name TEXT)")
         c.execute("""
             CREATE TABLE IF NOT EXISTS group_settings (
                 group_username TEXT PRIMARY KEY,
                 channels TEXT,
                 sub_style TEXT DEFAULT 'primary',
-                owner_id INTEGER DEFAULT 0
+                owner_id INTEGER DEFAULT 0,
+                warn_text TEXT
             )
         """)
         c.execute("CREATE TABLE IF NOT EXISTS known_chats (chat_id INTEGER PRIMARY KEY, chat_type TEXT, title TEXT)")
@@ -69,7 +65,6 @@ def init_db():
                 mode INTEGER DEFAULT 0
             )
         """)
-        # KUNLIK POST LIMITI JADVALI
         c.execute("""
             CREATE TABLE IF NOT EXISTS group_post_limits (
                 group_id INTEGER PRIMARY KEY,
@@ -89,15 +84,14 @@ def init_db():
             )
         """)
 
-        # Ustun qo'shish (eski DB bilan moslik)
         for alter in [
             "ALTER TABLE group_settings ADD COLUMN owner_id INTEGER DEFAULT 0",
             "ALTER TABLE group_settings ADD COLUMN sub_style TEXT DEFAULT 'primary'",
+            "ALTER TABLE group_settings ADD COLUMN warn_text TEXT",
             "ALTER TABLE mod_word_rules ADD COLUMN mode INTEGER DEFAULT 0",
             "ALTER TABLE group_post_limits ADD COLUMN apply_mode INTEGER DEFAULT 0",
         ]:
-            try:
-                c.execute(alter); conn.commit()
+            try: c.execute(alter); conn.commit()
             except: pass
 
         conn.commit()
@@ -122,7 +116,6 @@ def is_pro(uid):
     except: return False
     finally: conn.close()
 
-# ---- Bazaviy funksiyalar ----
 def add_admin_db(uid, name):
     conn = get_db()
     try:
@@ -163,13 +156,13 @@ def get_all_pro_users():
     except: return []
     finally: conn.close()
 
-def save_group_channels(group_username, channels, sub_style="primary", owner_id=0):
+def save_group_channels(group_username, channels, sub_style="primary", owner_id=0, warn_text=None):
     if not group_username.startswith("@"): group_username = "@" + group_username
     conn = get_db()
     try:
         conn.cursor().execute(
-            "INSERT OR REPLACE INTO group_settings (group_username, channels, sub_style, owner_id) VALUES (?,?,?,?)",
-            (group_username, channels, sub_style, owner_id)
+            "INSERT OR REPLACE INTO group_settings (group_username, channels, sub_style, owner_id, warn_text) VALUES (?,?,?,?,?)",
+            (group_username, channels, sub_style, owner_id, warn_text)
         )
         conn.commit()
     except: pass
@@ -179,10 +172,10 @@ def get_group_channels(group_username):
     conn = get_db()
     try:
         res = conn.cursor().execute(
-            "SELECT channels, sub_style FROM group_settings WHERE group_username=?", (group_username,)
+            "SELECT channels, sub_style, warn_text FROM group_settings WHERE group_username=?", (group_username,)
         ).fetchone()
-        return (res[0], res[1]) if res else (None, None)
-    except: return None, None
+        return (res[0], res[1], res[2]) if res else (None, None, None)
+    except: return None, None, None
     finally: conn.close()
 
 def delete_group_channels(group_username):
@@ -236,7 +229,6 @@ def get_admin_groups_info(admin_id):
     except: return []
     finally: conn.close()
 
-# ---- Moderator so'z filtri funksiyalari ----
 def mod_get_group(group_id):
     conn = get_db()
     try: return conn.cursor().execute("SELECT group_name FROM mod_groups WHERE group_id=?", (int(group_id),)).fetchone()
@@ -255,11 +247,6 @@ def mod_save_group(group_id, group_name, admin_id):
     finally: conn.close()
 
 def mod_add_rule(group_id, words, reply, mode=0):
-    """
-    mode=0 -> Faqat userlar (adminlar o'tkaza oladi)
-    mode=1 -> Faqat adminlar (faqat adminlarga taqiqlangan, anti-reklama)
-    mode=2 -> Hamma (Ownerdan tashqari barchaga taqiqlangan)
-    """
     conn = get_db()
     try:
         conn.cursor().execute(
@@ -298,13 +285,7 @@ def mod_delete_rule_word(rule_id, word_to_del):
     except: pass
     finally: conn.close()
 
-# ---- POST LIMIT FUNKSIYALARI ----
 def set_post_limit(group_id, limit_count, char_threshold, warning_text, apply_mode):
-    """
-    apply_mode=0 -> Faqat userlar (adminlar cheksiz)
-    apply_mode=1 -> Faqat adminlar (userlarga cheksiz, adminlarga limit)
-    apply_mode=2 -> Hamma (Ownerdan tashqari barchaga limit)
-    """
     conn = get_db()
     try:
         conn.cursor().execute("""
@@ -371,6 +352,7 @@ async def mod_get_user_groups(user_id: int, bot_instance):
 class SubState(StatesGroup):
     waiting_group     = State()
     waiting_channels  = State()
+    waiting_warn_text = State()  # YANGI: ogohlantirish matni
     waiting_sub_color = State()
     waiting_del_group = State()
 
@@ -379,6 +361,7 @@ class PostState(StatesGroup):
     waiting_btn_name      = State()
     waiting_btn_url       = State()
     waiting_btn_color     = State()
+    waiting_btn_layout    = State()  # YANGI: qator/yonida
     choose_target         = State()
     waiting_specific_chat = State()
 
@@ -408,14 +391,14 @@ class LimitState(StatesGroup):
 def main_menu_inline(uid):
     kb = InlineKeyboardBuilder()
     if is_admin(uid):
-        kb.button(text="📝 Post Yaratish",      callback_data="menu_post", style="primary")
-        kb.button(text="🔒 Majburiy Obuna",     callback_data="menu_sub", style="primary")
+        kb.button(text="📝 Post Yaratish",       callback_data="menu_post", style="primary")
+        kb.button(text="🔒 Majburiy Obuna",      callback_data="menu_sub", style="primary")
         kb.button(text="🛡 So'z Filtri & Limit", callback_data="menu_mod", style="primary")
     if is_founder(uid):
-        kb.button(text="👤 Adminlar boshqaruvi", callback_data="menu_admins", style="success")
-        kb.button(text="⭐️ Pro boshqaruvi",      callback_data="menu_pro_mgmt", style="success")
+        kb.button(text="👤 Adminlar boshqaruvi", callback_data="menu_admins", style="primary")
+        kb.button(text="⭐️ Pro boshqaruvi",      callback_data="menu_pro_mgmt", style="primary")
     if not is_admin(uid):
-        kb.button(text="⭐️ Pro Versiya",   callback_data="menu_pro", style="success")
+        kb.button(text="⭐️ Pro Versiya",   callback_data="menu_pro", style="primary")
         kb.button(text="🔑 Admin so'rash", callback_data="menu_req_admin", style="primary")
     kb.adjust(1)
     return kb.as_markup()
@@ -430,7 +413,7 @@ def color_kb(prefix):
 
 def cancel_kb(prefix="cancel"):
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔙 Bekor qilish", callback_data=prefix, style="danger")
+    kb.button(text="🔙 Bekor qilish", callback_data=prefix, style="danger" if prefix == "cancel" else "primary")
     return kb.as_markup()
 
 def done_or_cancel_kb():
@@ -440,12 +423,21 @@ def done_or_cancel_kb():
     kb.adjust(1)
     return kb.as_markup()
 
+def btn_layout_kb():
+    """Tugma joylashuvini tanlash"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬇️ Yangi qatorda (pastga)", callback_data="btn_layout_row", style="primary")
+    kb.button(text="➡️ Yoniga (bir qatorda)",   callback_data="btn_layout_inline", style="primary")
+    kb.button(text="🔙 Bekor qilish",           callback_data="cancel", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
 def admin_manage_inline():
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Admin qo'shish",    callback_data="adm_add", style="success")
     kb.button(text="➖ Admin o'chirish",   callback_data="adm_remove", style="danger")
     kb.button(text="📋 Adminlar ro'yxati", callback_data="adm_list", style="primary")
-    kb.button(text="🔙 Orqaga",            callback_data="menu_back", style="danger")
+    kb.button(text="🔙 Orqaga",            callback_data="menu_back", style="primary")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -454,7 +446,7 @@ def pro_manage_inline():
     kb.button(text="➕ Pro berish",    callback_data="pro_add", style="success")
     kb.button(text="➖ Pro o'chirish", callback_data="pro_remove", style="danger")
     kb.button(text="📋 Pro ro'yxati",  callback_data="pro_list", style="primary")
-    kb.button(text="🔙 Orqaga",        callback_data="menu_back", style="danger")
+    kb.button(text="🔙 Orqaga",        callback_data="menu_back", style="primary")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -475,18 +467,18 @@ def target_inline(uid):
 def mod_main_kb():
     return (
         InlineKeyboardBuilder()
-        .button(text="🏢 Mening guruhlarim",    callback_data="mod_list_groups", style="primary")
-        .button(text="🔄 Ro'yxatni yangilash",  callback_data="mod_list_groups", style="success")
-        .button(text="🔙 Bosh menyu",           callback_data="menu_back", style="danger")
+        .button(text="🏢 Mening guruhlarim",   callback_data="mod_list_groups", style="primary")
+        .button(text="🔄 Ro'yxatni yangilash", callback_data="mod_list_groups", style="primary")
+        .button(text="🔙 Bosh menyu",          callback_data="menu_back", style="primary")
         .adjust(1)
         .as_markup()
     )
 
 def sub_menu_kb():
     kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Obuna qo'shish",   callback_data="sub_add", style="success")
-    kb.button(text="➖ Obunaни o'chirish", callback_data="sub_del", style="danger")
-    kb.button(text="🔙 Orqaga",           callback_data="menu_back", style="danger")
+    kb.button(text="➕ Obuna qo'shish",    callback_data="sub_add", style="success")
+    kb.button(text="➖ Obunani o'chirish", callback_data="sub_del", style="danger")
+    kb.button(text="🔙 Orqaga",            callback_data="menu_back", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -516,37 +508,26 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 #                     YORDAMCHI FUNKSIYALAR
 # ============================================================
 async def auto_delete_warning(chat_id, user_id, msg, delay: int):
-    """Ogohlantirishni belgilangan vaqtdan keyin o'chiradi"""
     await asyncio.sleep(delay)
     try: await msg.delete()
     except: pass
-    finally:
-        user_key = (chat_id, user_id)
-        active_warnings.pop(user_key, None)
+    finally: active_warnings.pop((chat_id, user_id), None)
 
 async def poll_sub_until_joined(chat_id, user_id, warn_msg, channels: str, delay: int):
-    """
-    Har SUB_CHECK_INTERVAL soniyada userning obuna holatini tekshiradi.
-    Agar user obuna bo'lsa yoki vaqt tugasa, ogohlantirishni o'chiradi.
-    """
     start = time.time()
     while time.time() - start < delay:
         await asyncio.sleep(SUB_CHECK_INTERVAL)
         nosub = await check_sub(user_id, channels)
         if not nosub:
-            # User obuna bo'ldi — ogohlantirishni darhol o'chiramiz
             try: await warn_msg.delete()
             except: pass
-            user_key = (chat_id, user_id)
-            active_warnings.pop(user_key, None)
-            active_sub_polls.pop(user_key, None)
+            active_warnings.pop((chat_id, user_id), None)
+            active_sub_polls.pop((chat_id, user_id), None)
             return
-    # Vaqt tugadi — ogohlantirishni o'chiramiz
     try: await warn_msg.delete()
     except: pass
-    user_key = (chat_id, user_id)
-    active_warnings.pop(user_key, None)
-    active_sub_polls.pop(user_key, None)
+    active_warnings.pop((chat_id, user_id), None)
+    active_sub_polls.pop((chat_id, user_id), None)
 
 async def send_main_menu(target, uid, text=None):
     if is_founder(uid):   role = "👑 Founder"
@@ -560,12 +541,26 @@ async def send_main_menu(target, uid, text=None):
         try: await target.message.edit_text(msg, reply_markup=main_menu_inline(uid))
         except: await target.message.answer(msg, reply_markup=main_menu_inline(uid))
 
-async def _do_send(data, targets):
+def _build_btn_markup(btns):
+    """btns ichidagi 'row' field asosida tugmalarni qurish"""
+    if not btns:
+        return None
     builder = InlineKeyboardBuilder()
-    for b in data.get('btns', []):
-        try: builder.button(text=b['text'], url=b['url'], style=b.get('style', 'primary'))
-        except: pass
-    rm = builder.as_markup() if data.get('btns') else None
+    # Tugmalarni row_id bo'yicha guruhlash
+    from itertools import groupby
+    for row_id, group in groupby(btns, key=lambda b: b.get('row', 0)):
+        row_btns = list(group)
+        row_objs = []
+        for b in row_btns:
+            try:
+                row_objs.append(types.InlineKeyboardButton(text=b['text'], url=b['url'], style=b.get('style', 'primary')))
+            except TypeError:
+                row_objs.append(types.InlineKeyboardButton(text=b['text'], url=b['url'], style=b.get('style', 'primary')))
+        builder.row(*row_objs)
+    return builder.as_markup()
+
+async def _do_send(data, targets):
+    rm = _build_btn_markup(data.get('btns', []))
     success = 0
     for t in targets:
         try:
@@ -602,8 +597,6 @@ async def is_chat_admin(bot_instance, chat_id, user_id):
 # ============================================================
 #                  ASOSIY HANDLERLAR
 # ============================================================
-
-# ---- JOIN REQUEST ----
 @dp.chat_join_request()
 async def handle_join_request(update: types.ChatJoinRequest):
     chat_id = update.chat.id; now = time.time()
@@ -616,13 +609,11 @@ async def handle_join_request(update: types.ChatJoinRequest):
         try: await update.approve(); s['count'] += 1
         except: pass
 
-# ---- KIRISH/CHIQISH XABARLARI ----
 @dp.message(F.new_chat_members | F.left_chat_member)
 async def delete_service_messages(message: Message):
     try: await message.delete()
     except: pass
 
-# ---- BOT GURUHGA QO'SHILGANDA ----
 @dp.my_chat_member()
 async def bot_added_to_group(update: types.ChatMemberUpdated):
     new = update.new_chat_member
@@ -634,7 +625,6 @@ async def bot_added_to_group(update: types.ChatMemberUpdated):
         if is_admin(update.from_user.id):
             register_admin_group(update.from_user.id, chat.id)
 
-# ---- START ----
 @dp.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext):
     await state.clear()
@@ -643,7 +633,6 @@ async def start_handler(message: Message, state: FSMContext):
     await message.answer("👋", reply_markup=ReplyKeyboardRemove())
     await send_main_menu(message, message.from_user.id)
 
-# ---- ORQAGA / BEKOR QILISH ----
 @dp.callback_query(F.data == "menu_back")
 @dp.callback_query(F.data == "cancel")
 async def back_cb(call: CallbackQuery, state: FSMContext):
@@ -704,11 +693,8 @@ async def admin_panel_cb(call: CallbackQuery):
 async def adm_list_cb(call: CallbackQuery):
     if not is_founder(call.from_user.id): return
     admins = get_all_admins()
-    if admins:
-        text = "👤 <b>Adminlar ro'yxati:</b>\n\n" + "\n".join([f"• {a[1]} — <code>{a[0]}</code>" for a in admins])
-    else:
-        text = "Adminlar ro'yxati bo'sh."
-    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_admins", style="danger")
+    text = "👤 <b>Adminlar ro'yxati:</b>\n\n" + "\n".join([f"• {a[1]} — <code>{a[0]}</code>" for a in admins]) if admins else "Adminlar ro'yxati bo'sh."
+    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_admins", style="primary")
     await call.message.edit_text(text, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "adm_add")
@@ -721,8 +707,7 @@ async def adm_add_cb(call: CallbackQuery, state: FSMContext):
 async def adm_add_msg(message: Message, state: FSMContext):
     if not is_founder(message.from_user.id): return
     parts = message.text.strip().split(maxsplit=1)
-    uid_str = parts[0]
-    name = parts[1] if len(parts) > 1 else "Admin"
+    uid_str = parts[0]; name = parts[1] if len(parts) > 1 else "Admin"
     if uid_str.isdigit():
         add_admin_db(int(uid_str), name)
         await state.clear()
@@ -730,14 +715,13 @@ async def adm_add_msg(message: Message, state: FSMContext):
         try: await bot.send_message(int(uid_str), "🎉 Siz admin bo'ldingiz! /start bosing.")
         except: pass
     else:
-        await message.answer("❌ Noto'g'ri format. Faqat ID raqam kiriting (va ixtiyoriy ism).")
+        await message.answer("❌ Noto'g'ri format. Faqat ID raqam kiriting.")
 
 @dp.callback_query(F.data == "adm_remove")
-async def adm_remove_cb(call: CallbackQuery, state: FSMContext):
+async def adm_remove_cb(call: CallbackQuery):
     if not is_founder(call.from_user.id): return
     admins = get_all_admins()
-    if not admins:
-        return await call.answer("Adminlar ro'yxati bo'sh!", show_alert=True)
+    if not admins: return await call.answer("Adminlar ro'yxati bo'sh!", show_alert=True)
     kb = InlineKeyboardBuilder()
     for uid, name in admins:
         kb.button(text=f"❌ {name} ({uid})", callback_data=f"adm_del_{uid}", style="danger")
@@ -767,7 +751,7 @@ async def pro_list_cb(call: CallbackQuery):
     if not is_founder(call.from_user.id): return
     pros = get_all_pro_users()
     text = "⭐️ <b>Pro Foydalanuvchilar:</b>\n\n" + "\n".join([f"• {a[1]} — <code>{a[0]}</code>" for a in pros]) if pros else "Ro'yxat bo'sh."
-    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_pro_mgmt", style="danger")
+    kb = InlineKeyboardBuilder().button(text="🔙 Orqaga", callback_data="menu_pro_mgmt", style="primary")
     await call.message.edit_text(text, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "pro_add")
@@ -780,8 +764,7 @@ async def pro_add_cb(call: CallbackQuery, state: FSMContext):
 async def pro_add_msg(message: Message, state: FSMContext):
     if not is_founder(message.from_user.id): return
     parts = message.text.strip().split(maxsplit=1)
-    uid_str = parts[0]
-    name = parts[1] if len(parts) > 1 else "Pro User"
+    uid_str = parts[0]; name = parts[1] if len(parts) > 1 else "Pro User"
     if uid_str.isdigit():
         add_pro_user(int(uid_str), name)
         await state.clear()
@@ -789,14 +772,13 @@ async def pro_add_msg(message: Message, state: FSMContext):
         try: await bot.send_message(int(uid_str), "🌟 Tabriklaymiz! Sizga Pro maqomi berildi!")
         except: pass
     else:
-        await message.answer("❌ Noto'g'ri format. Faqat ID raqam kiriting.")
+        await message.answer("❌ Noto'g'ri format.")
 
 @dp.callback_query(F.data == "pro_remove")
-async def pro_remove_cb(call: CallbackQuery, state: FSMContext):
+async def pro_remove_cb(call: CallbackQuery):
     if not is_founder(call.from_user.id): return
     pros = get_all_pro_users()
-    if not pros:
-        return await call.answer("Pro foydalanuvchilar bo'sh!", show_alert=True)
+    if not pros: return await call.answer("Pro foydalanuvchilar bo'sh!", show_alert=True)
     kb = InlineKeyboardBuilder()
     for uid, name in pros:
         kb.button(text=f"❌ {name} ({uid})", callback_data=f"pro_del_{uid}", style="danger")
@@ -816,10 +798,8 @@ async def pro_del_cb(call: CallbackQuery):
 @dp.callback_query(F.data == "menu_pro")
 async def pro_info_cb(call: CallbackQuery):
     uid = call.from_user.id
-    if is_pro(uid):
-        await call.answer("Siz allaqachon Pro foydalanuvchisiz! ⭐️", show_alert=True)
-    else:
-        await call.answer("Pro versiya haqida ma'lumot uchun adminga murojaat qiling.", show_alert=True)
+    if is_pro(uid): await call.answer("Siz allaqachon Pro foydalanuvchisiz! ⭐️", show_alert=True)
+    else: await call.answer("Pro versiya haqida ma'lumot uchun adminga murojaat qiling.", show_alert=True)
 
 # ============================================================
 #                     POST YARATISH
@@ -836,15 +816,33 @@ async def post_start_cb(call: CallbackQuery, state: FSMContext):
 
 @dp.message(PostState.waiting_content)
 async def post_content(message: Message, state: FSMContext):
-    await state.update_data(from_chat_id=message.chat.id, message_id=message.message_id, btns=[])
+    await state.update_data(
+        from_chat_id=message.chat.id,
+        message_id=message.message_id,
+        btns=[],
+        next_row=0  # keyingi tugma qaysi qatorda bo'lishini kuzatish
+    )
     await state.set_state(PostState.waiting_btn_name)
     await message.answer("✅ Qabul qilindi!\n\nTugma nomi yuboring yoki ✅ Tayyor bosing:", reply_markup=done_or_cancel_kb())
 
-@dp.callback_query(F.data == "btn_done", PostState.waiting_btn_name)
+@dp.callback_query(PostState.waiting_btn_name, F.data == "btn_done")
 async def post_done_cb(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    # Preview
+    rm = _build_btn_markup(data.get('btns', []))
+    await call.message.answer("👀 <b>Post ko'rinishi:</b>")
+    try:
+        await bot.copy_message(
+            chat_id=call.message.chat.id,
+            from_chat_id=data['from_chat_id'],
+            message_id=data['message_id'],
+            reply_markup=rm
+        )
+    except Exception as e:
+        await call.message.answer(f"❌ Xatolik: {e}"); return
     await state.set_state(PostState.choose_target)
-    await call.message.edit_text("📤 Qayerga yuboramiz?", reply_markup=target_inline(data['user_id']))
+    await call.message.answer("📤 Qayerga yuboramiz?", reply_markup=target_inline(data['user_id']))
+    await call.answer()
 
 @dp.message(PostState.waiting_btn_name)
 async def btn_name_msg(message: Message, state: FSMContext):
@@ -854,28 +852,68 @@ async def btn_name_msg(message: Message, state: FSMContext):
 
 @dp.message(PostState.waiting_btn_url)
 async def btn_url_msg(message: Message, state: FSMContext):
-    if message.text.startswith("http"):
-        await state.update_data(t_u=message.text)
-        await state.set_state(PostState.waiting_btn_color)
-        await message.answer("🎨 Tugma rangini tanlang:", reply_markup=color_kb("style"))
-    else:
-        await message.answer("❌ Link http:// yoki https:// bilan boshlanishi kerak.")
+    if not message.text.startswith("http"):
+        await message.answer("❌ Link http:// yoki https:// bilan boshlanishi kerak."); return
+    await state.update_data(t_u=message.text.strip())
+    await state.set_state(PostState.waiting_btn_color)
+    await message.answer("🎨 Tugma rangini tanlang:", reply_markup=color_kb("style"))
 
-@dp.callback_query(F.data.startswith("style_"), PostState.waiting_btn_color)
+@dp.callback_query(PostState.waiting_btn_color, F.data.startswith("style_"))
 async def style_cb(call: CallbackQuery, state: FSMContext):
     color = call.data.split("_")[1]
+    await state.update_data(t_c=color)
     data = await state.get_data()
     btns = data.get('btns', [])
-    btns.append({'text': data['t_n'], 'url': data['t_u'], 'style': color})
-    await state.update_data(btns=btns)
+
+    if not btns:
+        # Birinchi tugma — to'g'ridan qo'shiladi (qator 0)
+        btns.append({'text': data['t_n'], 'url': data['t_u'], 'style': color, 'row': 0})
+        await state.update_data(btns=btns, next_row=1)
+        await state.set_state(PostState.waiting_btn_name)
+        await call.message.edit_text(
+            f"✅ 1-tugma qo'shildi.\n\nYana tugma qo'shing yoki ✅ Tayyor bosing:",
+            reply_markup=done_or_cancel_kb()
+        )
+    else:
+        # Ikkinchi+ tugma — joylashuvni tanlash
+        await state.set_state(PostState.waiting_btn_layout)
+        last_btn = btns[-1]
+        await call.message.edit_text(
+            f"📐 <b>«{data['t_n']}»</b> tugmasini qayerga qo'yamiz?\n\n"
+            f"⬇️ <b>Yangi qatorda</b> — oldingi tugmaning pastiga\n"
+            f"➡️ <b>Yoniga</b> — «{last_btn['text']}» bilan bir qatorda",
+            reply_markup=btn_layout_kb()
+        )
+    await call.answer()
+
+@dp.callback_query(PostState.waiting_btn_layout, F.data.startswith("btn_layout_"))
+async def btn_layout_cb(call: CallbackQuery, state: FSMContext):
+    layout = call.data.split("_")[2]  # 'row' yoki 'inline'
+    data = await state.get_data()
+    btns = data.get('btns', [])
+    next_row = data.get('next_row', 1)
+
+    if layout == 'row':
+        # Yangi qatorda
+        new_row = next_row
+        next_row += 1
+    else:
+        # Oxirgi qator bilan bir xil
+        new_row = btns[-1]['row'] if btns else 0
+
+    btns.append({'text': data['t_n'], 'url': data['t_u'], 'style': data.get('t_c', 'primary'), 'row': new_row})
+    await state.update_data(btns=btns, next_row=next_row)
     await state.set_state(PostState.waiting_btn_name)
+
+    layout_text = "⬇️ yangi qatorda" if layout == 'row' else f"➡️ «{btns[-2]['text']}» yonida"
     await call.message.edit_text(
-        f"✅ Tugma qo'shildi (Jami: {len(btns)} ta).\n\nYana tugma qo'shing yoki ✅ Tayyor bosing:",
+        f"✅ {len(btns)}-tugma qo'shildi ({layout_text}).\n\nYana tugma qo'shing yoki ✅ Tayyor bosing:",
         reply_markup=done_or_cancel_kb()
     )
+    await call.answer()
 
 # ---- TARGET CALLBACKLAR ----
-@dp.callback_query(F.data == "target_all", PostState.choose_target)
+@dp.callback_query(PostState.choose_target, F.data == "target_all")
 async def target_all_cb(call: CallbackQuery, state: FSMContext):
     if not is_founder(call.from_user.id): return
     data = await state.get_data()
@@ -885,7 +923,7 @@ async def target_all_cb(call: CallbackQuery, state: FSMContext):
     success = await _do_send(data, chats)
     await call.message.edit_text(f"✅ Barcha chatlarga yuborildi!\nMuvaffaqiyatli: {success} ta")
 
-@dp.callback_query(F.data == "target_specific", PostState.choose_target)
+@dp.callback_query(PostState.choose_target, F.data == "target_specific")
 async def target_specific_cb(call: CallbackQuery, state: FSMContext):
     if not is_founder(call.from_user.id): return
     await state.set_state(PostState.waiting_specific_chat)
@@ -899,17 +937,16 @@ async def specific_chat_msg(message: Message, state: FSMContext):
         chat_id = int(message.text.strip())
         success = await _do_send(data, [(chat_id,)])
         await message.answer(f"✅ Yuborildi! Muvaffaqiyat: {success}")
-    except:
-        await message.answer("❌ Noto'g'ri chat ID.")
+    except: await message.answer("❌ Noto'g'ri chat ID.")
 
-@dp.callback_query(F.data == "target_self", PostState.choose_target)
+@dp.callback_query(PostState.choose_target, F.data == "target_self")
 async def target_self_cb(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.clear()
     success = await _do_send(data, [(call.from_user.id,)])
-    await call.message.edit_text(f"✅ O'zingizga yuborildi!" if success else "❌ Yuborishda xatolik.")
+    await call.message.edit_text("✅ O'zingizga yuborildi!" if success else "❌ Yuborishda xatolik.")
 
-@dp.callback_query(F.data.startswith("target_group_"), PostState.choose_target)
+@dp.callback_query(PostState.choose_target, F.data.startswith("target_group_"))
 async def target_group_cb(call: CallbackQuery, state: FSMContext):
     g_id = int(call.data.split("_")[2])
     data = await state.get_data()
@@ -918,7 +955,7 @@ async def target_group_cb(call: CallbackQuery, state: FSMContext):
         return await call.answer("Bu guruh sizning guruhingiz emas!", show_alert=True)
     await state.clear()
     success = await _do_send(data, [(g_id,)])
-    await call.message.edit_text(f"✅ Guruhga yuborildi!" if success else "❌ Yuborishda xatolik.")
+    await call.message.edit_text("✅ Guruhga yuborildi!" if success else "❌ Yuborishda xatolik.")
 
 # ============================================================
 #                     MAJBURIY OBUNA
@@ -966,6 +1003,16 @@ async def sub_gr_msg(message: Message, state: FSMContext):
 @dp.message(SubState.waiting_channels)
 async def sub_ch_msg(message: Message, state: FSMContext):
     await state.update_data(chans=message.text.strip())
+    await state.set_state(SubState.waiting_warn_text)
+    await message.answer(
+        "💬 Obuna bo'lmagan userlarga yuboriladigan <b>ogohlantirish matnini</b> yuboring:\n\n"
+        "<i>Misol: Guruhda yozish uchun avval quyidagi kanallarga obuna bo'ling!</i>",
+        reply_markup=cancel_kb("menu_sub")
+    )
+
+@dp.message(SubState.waiting_warn_text)
+async def sub_warn_msg(message: Message, state: FSMContext):
+    await state.update_data(warn_text=message.text.strip())
     await state.set_state(SubState.waiting_sub_color)
     await message.answer("🎨 Obuna tugmasi rangini tanlang:", reply_markup=color_kb("subcolor"))
 
@@ -973,12 +1020,20 @@ async def sub_ch_msg(message: Message, state: FSMContext):
 async def subcolor_cb(call: CallbackQuery, state: FSMContext):
     color = call.data.split("_")[1]
     data = await state.get_data()
-    save_group_channels(data['gr'], data['chans'], sub_style=color, owner_id=call.from_user.id)
+    save_group_channels(
+        data['gr'], data['chans'],
+        sub_style=color,
+        owner_id=call.from_user.id,
+        warn_text=data.get('warn_text')
+    )
     await call.message.edit_text(
         f"✅ <b>{data['gr']}</b> guruhi uchun majburiy obuna saqlandi!\n"
-        f"Kanallar: {data['chans']}\nTugma rangi: {color}"
+        f"Kanallar: {data['chans']}\n"
+        f"Tugma rangi: {color}\n"
+        f"Ogohlantirish matni: {data.get('warn_text', 'standart')}"
     )
     await state.clear()
+    await call.answer()
 
 # ============================================================
 #                     MODERATOR & LIMIT
@@ -999,9 +1054,10 @@ async def mod_list_groups_cb(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
     for g_id, g_name in groups:
         kb.button(text=f"👥 {g_name}", callback_data=f"mod_manage_{g_id}", style="primary")
-    kb.button(text="🔙 Orqaga", callback_data="menu_mod", style="danger")
+    kb.button(text="🔙 Orqaga", callback_data="menu_mod", style="primary")
     kb.adjust(1)
     await call.message.edit_text("Guruhni tanlang:", reply_markup=kb.as_markup())
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("mod_manage_"))
 async def mod_manage_cb(call: CallbackQuery):
@@ -1010,16 +1066,16 @@ async def mod_manage_cb(call: CallbackQuery):
     l_set = get_post_limit_settings(int(g_id))
     limit_text = f"✅ Yoqilgan (kunda {l_set[0]} ta)" if l_set else "❌ O'chirilgan"
     kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Yangi so'z filtri qo'shish", callback_data=f"mod_add_{g_id}", style="success")
+    kb.button(text="➕ Yangi so'z filtri qo'shish",       callback_data=f"mod_add_{g_id}", style="success")
     kb.button(text=f"🗑 Filtrlarni ko'rish ({len(rules)} ta)", callback_data=f"mod_view_{g_id}", style="primary")
-    kb.button(text=f"📊 Kunlik Limit: {limit_text}", callback_data=f"mod_limit_{g_id}", style="primary")
+    kb.button(text=f"📊 Kunlik Limit: {limit_text}",      callback_data=f"mod_limit_{g_id}", style="primary")
     if l_set:
         kb.button(text="🗑 Limitni o'chirish", callback_data=f"mod_limit_del_{g_id}", style="danger")
-    kb.button(text="🔙 Orqaga", callback_data="mod_list_groups", style="danger")
+    kb.button(text="🔙 Orqaga", callback_data="mod_list_groups", style="primary")
     kb.adjust(1)
     await call.message.edit_text("⚙️ <b>Guruh sozlamalari:</b>", reply_markup=kb.as_markup())
+    await call.answer()
 
-# ---- SO'Z FILTRI QO'SHISH ----
 @dp.callback_query(F.data.startswith("mod_add_"))
 async def mod_add_cb(call: CallbackQuery, state: FSMContext):
     g_id = call.data.split("_")[2]
@@ -1029,6 +1085,7 @@ async def mod_add_cb(call: CallbackQuery, state: FSMContext):
         "📝 Taqiqlangan so'zlarni vergul bilan yuboring:\n\n<i>Misol: reklama, spam, link</i>",
         reply_markup=cancel_kb(f"mod_manage_{g_id}")
     )
+    await call.answer()
 
 @dp.message(ModState.waiting_for_words)
 async def mod_words_msg(message: Message, state: FSMContext):
@@ -1046,12 +1103,12 @@ async def mod_reply_msg(message: Message, state: FSMContext):
     await message.answer(
         "🎯 Bu filtr kimga amal qilsin?\n\n"
         "👥 <b>Faqat Userlarga</b> — Adminlar bu so'zlarni ishlata oladi\n"
-        "🛡 <b>Faqat Adminlarga</b> — Faqat adminlarga taqiqlangan (anti-reklama)\n"
+        "🛡 <b>Faqat Adminlarga</b> — Faqat adminlarga taqiqlangan\n"
         "🔥 <b>Hammaga</b> — Ownerdan tashqari barchaga taqiqlangan",
         reply_markup=word_mode_kb()
     )
 
-@dp.callback_query(F.data.startswith("wmode_"), ModState.waiting_word_mode)
+@dp.callback_query(ModState.waiting_word_mode, F.data.startswith("wmode_"))
 async def mod_mode_cb(call: CallbackQuery, state: FSMContext):
     mode = int(call.data.split("_")[1])
     data = await state.get_data()
@@ -1064,8 +1121,8 @@ async def mod_mode_cb(call: CallbackQuery, state: FSMContext):
         f"Rejim: {mode_text}"
     )
     await state.clear()
+    await call.answer()
 
-# ---- SO'Z FILTRLARINI KO'RISH ----
 @dp.callback_query(F.data.startswith("mod_view_"))
 async def mod_view_cb(call: CallbackQuery):
     g_id = call.data.split("_")[2]
@@ -1079,14 +1136,12 @@ async def mod_view_cb(call: CallbackQuery):
     mode_icons = {0: "👥", 1: "🛡", 2: "🔥"}
     for r_id, words, reply, mode in rules:
         icon = mode_icons.get(mode, "👥")
-        kb.button(
-            text=f"{icon} {words[:25]}... | {reply[:15]}",
-            callback_data=f"mod_rule_{r_id}_{g_id}",
-            style="primary"
-        )
-    kb.button(text="🔙 Orqaga", callback_data=f"mod_manage_{g_id}", style="danger")
+        short_words = words[:20] + "..." if len(words) > 20 else words
+        kb.button(text=f"{icon} {short_words}", callback_data=f"mod_rule_{r_id}_{g_id}", style="primary")
+    kb.button(text="🔙 Orqaga", callback_data=f"mod_manage_{g_id}", style="primary")
     kb.adjust(1)
     await call.message.edit_text(f"🗂 Filtrlar ({len(rules)} ta):", reply_markup=kb.as_markup())
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("mod_rule_"))
 async def mod_rule_detail_cb(call: CallbackQuery):
@@ -1094,12 +1149,11 @@ async def mod_rule_detail_cb(call: CallbackQuery):
     r_id = parts[2]; g_id = parts[3]
     rules = mod_get_rules(g_id)
     rule = next((r for r in rules if str(r[0]) == r_id), None)
-    if not rule:
-        return await call.answer("Filtr topilmadi!", show_alert=True)
+    if not rule: return await call.answer("Filtr topilmadi!", show_alert=True)
     mode_text = {0: "👥 Faqat Userlarga", 1: "🛡 Faqat Adminlarga", 2: "🔥 Hammaga"}.get(rule[3], "Noma'lum")
     kb = InlineKeyboardBuilder()
     kb.button(text="🗑 Filterni o'chirish", callback_data=f"mod_del_rule_{r_id}_{g_id}", style="danger")
-    kb.button(text="🔙 Orqaga", callback_data=f"mod_view_{g_id}", style="primary")
+    kb.button(text="🔙 Orqaga",             callback_data=f"mod_view_{g_id}", style="primary")
     kb.adjust(1)
     await call.message.edit_text(
         f"📋 <b>Filtr ma'lumotlari:</b>\n\n"
@@ -1108,6 +1162,7 @@ async def mod_rule_detail_cb(call: CallbackQuery):
         f"Rejim: {mode_text}",
         reply_markup=kb.as_markup()
     )
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("mod_del_rule_"))
 async def mod_del_rule_cb(call: CallbackQuery):
@@ -1115,17 +1170,17 @@ async def mod_del_rule_cb(call: CallbackQuery):
     r_id = int(parts[3]); g_id = parts[4]
     mod_delete_rule(r_id)
     await call.message.edit_text("✅ Filtr o'chirildi.", reply_markup=cancel_kb(f"mod_manage_{g_id}"))
+    await call.answer()
 
-# ---- KUNLIK POST LIMITI ----
 @dp.callback_query(F.data.startswith("mod_limit_del_"))
 async def mod_limit_del_cb(call: CallbackQuery):
     g_id = int(call.data.split("_")[3])
     remove_post_limit(g_id)
     await call.message.edit_text("✅ Kunlik limit o'chirildi.", reply_markup=cancel_kb(f"mod_manage_{g_id}"))
+    await call.answer()
 
 @dp.callback_query(F.data.startswith("mod_limit_"))
 async def mod_limit_start(call: CallbackQuery, state: FSMContext):
-    # "mod_limit_del_" bilan boshlanmasligi uchun allaqachon handler yuqorida
     g_id = call.data.split("_")[2]
     await state.update_data(active_gid=g_id)
     current = get_post_limit_settings(int(g_id))
@@ -1135,6 +1190,7 @@ async def mod_limit_start(call: CallbackQuery, state: FSMContext):
         f"🔢 Bir kunda necha marta post tashlasa bo'ladi? (Misol: 3){cur_text}",
         reply_markup=cancel_kb(f"mod_manage_{g_id}")
     )
+    await call.answer()
 
 @dp.message(LimitState.waiting_count)
 async def limit_count_set(message: Message, state: FSMContext):
@@ -1187,6 +1243,7 @@ async def limit_final_cb(call: CallbackQuery, state: FSMContext):
         f"Ogohlantirish: {data['l_text']}"
     )
     await state.clear()
+    await call.answer()
 
 # ============================================================
 #              GURUH NAZORATI — ASOSIY WATCHER
@@ -1198,18 +1255,15 @@ async def watcher(message: Message):
     if is_admin(message.from_user.id):
         register_admin_group(message.from_user.id, message.chat.id)
 
-    chat_id   = message.chat.id
-    user_id   = message.from_user.id
-    user_key  = (chat_id, user_id)
+    chat_id  = message.chat.id
+    user_id  = message.from_user.id
+    user_key = (chat_id, user_id)
 
-    # ✅ FOUNDER BYPASS — hech qanday cheklovga tushmaydi
     if is_founder(user_id): return
 
-    # ============================================================
-    # 1. OBUNA TEKSHIRUVI
-    # ============================================================
+    # ---- 1. OBUNA TEKSHIRUVI ----
     if message.chat.username:
-        chans, style = get_group_channels(f"@{message.chat.username}")
+        chans, style, warn_text = get_group_channels(f"@{message.chat.username}")
         if chans:
             try:
                 m = await bot.get_chat_member(chat_id, user_id)
@@ -1218,40 +1272,30 @@ async def watcher(message: Message):
                     if nosub:
                         try: await message.delete()
                         except: pass
-
                         if user_key not in active_warnings:
                             kb = InlineKeyboardBuilder()
                             for c in nosub:
                                 c_clean = c.strip().replace('@', '')
-                                kb.button(
-                                    text=f"📢 {c.strip()} ga obuna bo'lish",
-                                    url=f"https://t.me/{c_clean}",
-                                    style=style or "primary"
-                                )
+                                try:
+                                    kb.button(text=f"📢 {c.strip()}", url=f"https://t.me/{c_clean}", style=style or "primary")
+                                except:
+                                    kb.button(text=f"📢 {c.strip()}", url=f"https://t.me/{c_clean}", style="primary")
                             kb.adjust(1)
+                            # Admin kiritgan matn yoki standart
+                            text = warn_text or "Guruhda yozish uchun avval quyidagi kanallarga obuna bo'ling!"
                             w = await message.answer(
-                                f"⚠️ {message.from_user.mention_html()}, quyidagi kanallarga a'zo bo'lmasangiz "
-                                f"bu guruhda yoza olmaysiz!\n\n"
-                                f"A'zo bo'lgach xabaringiz avtomatik o'chiriladi.",
+                                f"⚠️ {message.from_user.mention_html()}, {text}",
                                 reply_markup=kb.as_markup()
                             )
-                            # Ogohlantirish tasklari (parallel ishlaydi)
                             active_warnings[user_key] = True
-
-                            # Background task: 4 soniyada bir obuna tekshirish
                             poll_task = asyncio.create_task(
                                 poll_sub_until_joined(chat_id, user_id, w, chans, WARNING_TIMEOUT)
                             )
                             active_sub_polls[user_key] = poll_task
-                        else:
-                            # Allaqachon ogohlantirish bor — faqat xabarni o'chiramiz
-                            pass
                         return
             except: pass
 
-    # ============================================================
-    # 2. SO'Z FILTRI
-    # ============================================================
+    # ---- 2. SO'Z FILTRI ----
     if message.text:
         rules = mod_get_rules(chat_id)
         if rules:
@@ -1266,34 +1310,24 @@ async def watcher(message: Message):
             for r_id, words, reply, mode in rules:
                 word_list = [w.strip() for w in words.split(",") if w.strip()]
                 if not any(w in msg_lower for w in word_list): continue
-
-                # mode=0: Faqat userlarga (adminlar o'tkaza oladi)
                 if mode == 0 and is_c_admin: continue
-                # mode=1: Faqat adminlarga (userlar o'tkaza oladi)
                 if mode == 1 and not is_c_admin: continue
-                # mode=2: Hamma (owner o'tkaza oladi)
                 if mode == 2 and is_c_owner: continue
-
                 try:
                     await message.delete()
                     if user_key not in active_warnings:
-                        w = await message.answer(
-                            f"⚠️ {message.from_user.mention_html()}, {reply}"
-                        )
+                        w = await message.answer(f"⚠️ {message.from_user.mention_html()}, {reply}")
                         active_warnings[user_key] = asyncio.create_task(
                             auto_delete_warning(chat_id, user_id, w, WARNING_TIMEOUT)
                         )
                 except: pass
                 return
 
-    # ============================================================
-    # 3. KUNLIK POST LIMITI
-    # ============================================================
+    # ---- 3. KUNLIK POST LIMITI ----
     if message.text:
         l_set = get_post_limit_settings(chat_id)
         if l_set:
             l_max, l_chars, l_warn, l_mode = l_set
-
             if len(message.text) >= l_chars:
                 is_c_admin = await is_chat_admin(bot, chat_id, user_id)
                 is_c_owner = False
@@ -1302,11 +1336,8 @@ async def watcher(message: Message):
                     if m.status == "creator": is_c_owner = True
                 except: pass
 
-                # mode=0: Faqat userlarga — adminlar o'tkazib yuboriladi
                 if l_mode == 0 and is_c_admin: return
-                # mode=1: Faqat adminlarga — userlar o'tkazib yuboriladi
                 if l_mode == 1 and not is_c_admin: return
-                # mode=2: Hamma — owner o'tkazib yuboriladi
                 if l_mode == 2 and is_c_owner: return
 
                 allowed, count = check_and_inc_user_post(user_id, chat_id, l_max)
