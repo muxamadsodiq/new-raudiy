@@ -19,8 +19,8 @@ logging.basicConfig(level=logging.INFO)
 # ============================================================
 #                        SOZLAMALAR
 # ============================================================
-TOKEN = "8512313403:AAESY3RE6Myo9XNqpXx3Qww2f72iG75jHHU"
-MAIN_ADMIN_ID = 5724592490
+TOKEN = os.getenv("BOT_TOKEN")
+MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "0"))
 DB_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_bot.db")
 
 LIMIT_PEOPLE       = 3
@@ -500,6 +500,11 @@ def limit_mode_kb():
 # ============================================================
 #                       BOT SETUP
 # ============================================================
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN muhit o'zgaruvchisi o'rnatilmagan! .env faylini yozing yoki muhit o'zgaruvchisini o'rnating.")
+if not MAIN_ADMIN_ID:
+    raise RuntimeError("MAIN_ADMIN_ID muhit o'zgaruvchisi o'rnatilmagan!")
+
 dp  = Dispatcher()
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
