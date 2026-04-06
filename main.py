@@ -4,6 +4,7 @@ import sqlite3
 import time
 import datetime
 import os
+from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, F, html, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
@@ -19,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 # ============================================================
 #                        SOZLAMALAR
 # ============================================================
-TOKEN = "8512313403:AAESY3RE6Myo9XNqpXx3Qww2f72iG75jHHU"
+TOKEN = "8609792837:AAEEi8ocGiG4l3DBs4tjKkoOslzFr-D9F_k"
 MAIN_ADMIN_ID = 5724592490
 DB_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_bot.db")
 
@@ -27,6 +28,7 @@ LIMIT_PEOPLE       = 3
 LIMIT_TIME         = 600
 WARNING_TIMEOUT    = 180
 SUB_CHECK_INTERVAL = 1
+APP_TIMEZONE       = "Asia/Tashkent"
 
 active_warnings  = {}
 active_sub_polls = {}
@@ -179,7 +181,7 @@ def get_group_channels(group_username):
         return (res[0], res[1], res[2]) if res else (None, None, None)
     except: return None, None, None
     finally: conn.close()
-
+     
 def delete_group_channels(group_username):
     if not group_username.startswith("@"): group_username = "@" + group_username
     conn = get_db()
@@ -307,7 +309,8 @@ def limit_delete(limit_id):
     finally: conn.close()
 
 def check_and_inc_post(user_id, group_id, limit_id, limit_max):
-    today = datetime.date.today().isoformat()
+    # Daily limit resets by Uzbekistan local date.
+    today = datetime.datetime.now(ZoneInfo(APP_TIMEZONE)).date().isoformat()
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1419,6 +1422,10 @@ async def watcher(message: Message):
 # ============================================================
 async def main():
     init_db()
+    now_server = datetime.datetime.now().astimezone()
+    now_uz = datetime.datetime.now(ZoneInfo(APP_TIMEZONE))
+    print(f"🕒 Server vaqti: {now_server.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+    print(f"🕒 Limit vaqti ({APP_TIMEZONE}): {now_uz.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
     print("✅ BOT ISHGA TUSHDI!")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
