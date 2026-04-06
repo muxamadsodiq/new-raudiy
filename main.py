@@ -4,6 +4,8 @@ import sqlite3
 import time
 import datetime
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from aiogram import Bot, Dispatcher, F, html, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
@@ -20,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 #                        SOZLAMALAR
 # ============================================================
 TOKEN = os.getenv("BOT_TOKEN")
-MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID", "0"))
+MAIN_ADMIN_ID = os.getenv("MAIN_ADMIN_ID")
 DB_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_bot.db")
 
 LIMIT_PEOPLE       = 3
@@ -503,7 +505,9 @@ def limit_mode_kb():
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN muhit o'zgaruvchisi o'rnatilmagan! .env faylini yozing yoki muhit o'zgaruvchisini o'rnating.")
 if not MAIN_ADMIN_ID:
-    raise RuntimeError("MAIN_ADMIN_ID muhit o'zgaruvchisi o'rnatilmagan!")
+    raise RuntimeError("MAIN_ADMIN_ID muhit o'zgaruvchisi o'rnatilmagan! .env faylini yozing yoki muhit o'zgaruvchisini o'rnating.")
+
+MAIN_ADMIN_ID = int(MAIN_ADMIN_ID)
 
 dp  = Dispatcher()
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
