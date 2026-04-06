@@ -1425,7 +1425,7 @@ async def main():
     now_server = datetime.datetime.now().astimezone()
     now_uz = datetime.datetime.now(ZoneInfo(APP_TIMEZONE))
     print(f"🕒 Server vaqti: {now_server.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
-    print(f"🕒 Limit vaqti ({APP_TIMEZONE}): {now_uz.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+    print(f"🕒 Limit vaqti ({APP_TIMEZONE})")
     print("✅ BOT ISHGA TUSHDI!")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
