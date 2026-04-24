@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 # ============================================================
 #                        SOZLAMALAR
 # ============================================================
-TOKEN          = "7018329872:AAGfELzfqDfXjfkejfjiE0hdC_AeXsByJRk"
+TOKEN = "8479028821:AAGAdf3kp0wC4yx4E9XLzbfc3SD9PVvCkBM"
 MAIN_ADMIN_ID  = 5724592490
 DB_NAME        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_bot.db")
 
@@ -39,7 +39,16 @@ group_stats      = {}
 _db_lock = asyncio.Lock()  # FIX #4: race condition uchun lock
 
 def get_db():
-    return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-20000")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except Exception:
+        pass
+    return conn
 
 def _table_columns(conn, table_name):
     try:
@@ -1453,6 +1462,138 @@ async def lim_del_cb(call: CallbackQuery):
 # ============================================================
 #              GURUH NAZORATI — ASOSIY WATCHER
 # ============================================================
+# ============================================================
+#              DATABASE BACKUP / RECOVER (admin only)
+# ============================================================
+from aiogram.filters import Command
+from aiogram.types import FSInputFile, BufferedInputFile
+
+_recover_waiting = set()  # user_id lari – hozir fayl kutayotganlar
+
+@dp.message(Command("database"))
+async def cmd_database_backup(message: Message):
+    uid = message.from_user.id
+    if not (is_founder(uid) or is_admin(uid)):
+        await message.answer(f"❌ Sizga ruxsat yo'q. Sizning ID: <code>{uid}</code>")
+        return
+    try:
+        # WAL fayllarini diskka flush qilish uchun checkpoint
+        try:
+            conn = get_db()
+            conn.execute("PRAGMA wal_checkpoint(FULL)")
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.warning(f"wal_checkpoint xato: {e}")
+
+        if not os.path.exists(DB_NAME):
+            await message.answer("❌ Database fayli topilmadi.")
+            return
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"backup_{ts}.db"
+        doc = FSInputFile(DB_NAME, filename=fname)
+        size_kb = os.path.getsize(DB_NAME) / 1024
+        await message.answer_document(
+            doc,
+            caption=(
+                f"💾 <b>Database backup</b>\n"
+                f"📄 Fayl: <code>{fname}</code>\n"
+                f"📦 Hajm: {size_kb:.1f} KB\n\n"
+                f"Tiklash uchun: /recoverdatabase"
+            ),
+        )
+    except Exception as e:
+        logging.exception("database backup error")
+        await message.answer(f"❌ Xatolik: <code>{e}</code>")
+
+
+@dp.message(Command("recoverdatabase"))
+async def cmd_recover_database(message: Message):
+    uid = message.from_user.id
+    if not (is_founder(uid) or is_admin(uid)):
+        await message.answer(f"❌ Sizga ruxsat yo'q. Sizning ID: <code>{uid}</code>")
+        return
+    _recover_waiting.add(uid)
+    await message.answer(
+        "♻️ <b>Database tiklash</b>\n\n"
+        "Iltimos, <b>.db</b> faylni shu chatga yuboring.\n"
+        "Bekor qilish uchun: /cancelrecover"
+    )
+
+
+@dp.message(Command("cancelrecover"))
+async def cmd_cancel_recover(message: Message):
+    uid = message.from_user.id
+    if uid in _recover_waiting:
+        _recover_waiting.discard(uid)
+        await message.answer("❎ Tiklash bekor qilindi.")
+
+
+@dp.message(F.document)
+async def handle_db_recover_document(message: Message):
+    uid = message.from_user.id
+    if uid not in _recover_waiting:
+        return  # bu document uchun bizga tegishli emas
+    if not (is_founder(uid) or is_admin(uid)):
+        _recover_waiting.discard(uid)
+        return
+
+    doc = message.document
+    fname = (doc.file_name or "").lower()
+    if not fname.endswith(".db"):
+        await message.answer("❌ Faqat .db fayl qabul qilinadi.")
+        return
+
+    try:
+        # eski bazani backup qilish
+        if os.path.exists(DB_NAME):
+            safety = DB_NAME + f".old_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            try:
+                import shutil
+                shutil.copy2(DB_NAME, safety)
+            except Exception as e:
+                logging.warning(f"eski db nusxa olishda xato: {e}")
+
+        # WAL/SHM fayllarini tozalash (yangi baza uchun toza holat)
+        for suf in ("-wal", "-shm", "-journal"):
+            p = DB_NAME + suf
+            if os.path.exists(p):
+                try: os.remove(p)
+                except: pass
+
+        tmp_path = DB_NAME + ".incoming"
+        await bot.download(doc, destination=tmp_path)
+
+        # tekshirish: haqiqiy sqlite faylmi
+        try:
+            t = sqlite3.connect(tmp_path, timeout=10)
+            t.execute("PRAGMA integrity_check;").fetchone()
+            t.close()
+        except Exception as e:
+            try: os.remove(tmp_path)
+            except: pass
+            await message.answer(f"❌ Fayl yaroqli SQLite bazasi emas: <code>{e}</code>")
+            return
+
+        os.replace(tmp_path, DB_NAME)
+        _recover_waiting.discard(uid)
+
+        # migratsiya / jadvallarni ta'minlash
+        try:
+            init_db()
+        except Exception as e:
+            logging.warning(f"init_db keyin xato: {e}")
+
+        await message.answer(
+            "✅ <b>Database muvaffaqiyatli tiklandi.</b>\n"
+            "Eski baza <code>.old_*</code> nomi bilan saqlab qo'yildi."
+        )
+    except Exception as e:
+        logging.exception("recover db error")
+        await message.answer(f"❌ Tiklashda xatolik: <code>{e}</code>")
+
+
 @dp.message()
 async def watcher(message: Message):
     # FIX #3 & #7: from_user None bo'lishi va servis xabarlar uchun erta qaytish
@@ -1570,6 +1711,7 @@ async def watcher(message: Message):
                             )
                     except: pass
                     return  # Bir limit ishladi — keyingisini tekshirmaslik
+
 
 # ============================================================
 #                          MAIN
